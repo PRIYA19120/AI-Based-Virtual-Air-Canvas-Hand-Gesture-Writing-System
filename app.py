@@ -59,15 +59,48 @@ save_folder = os.path.abspath("saved_drawings")
 
 recognized_text = "Press T to recognize text"
 
+undo_stack = []
+redo_stack = []
+max_history = 20
+
+drawing_active = False
+
+
+def reset_stroke():
+
+    global drawing_active
+    global prev_x, prev_y
+    global smooth_x, smooth_y
+
+    drawing_active = False
+
+    prev_x, prev_y = None, None
+    smooth_x, smooth_y = None, None
+
+
+def remember_canvas():
+
+    undo_stack.append(canvas.copy())
+
+    if len(undo_stack) > max_history:
+        undo_stack.pop(0)
+
+    redo_stack.clear()
+
 
 def select_color(index):
 
     global color_index, eraser
 
+    changed = color_index != index or eraser
+
     color_index = index
     eraser = False
 
-    print(colors[index][0], "selected")
+    reset_stroke()
+
+    if changed:
+        print(colors[index][0], "selected")
 
 
 def save_canvas(image):
@@ -85,13 +118,18 @@ def save_canvas(image):
         print("Drawing could not be saved!")
 
 
-
 def recognize_handwriting(image):
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2GRAY
+    )
 
     _, binary = cv2.threshold(
-        gray, 8, 255, cv2.THRESH_BINARY
+        gray,
+        8,
+        255,
+        cv2.THRESH_BINARY
     )
 
     pixel_count = cv2.countNonZero(binary)
@@ -114,6 +152,7 @@ def recognize_handwriting(image):
 
     x1 = max(0, x - padding_x)
     y1 = max(0, y - padding_y)
+
     x2 = min(image.shape[1], x + w + padding_x)
     y2 = min(image.shape[0], y + h + padding_y)
 
@@ -148,7 +187,8 @@ def recognize_handwriting(image):
     )
 
     debug_path = os.path.join(
-        save_folder, "ocr_input.png"
+        save_folder,
+        "ocr_input.png"
     )
 
     cv2.imwrite(debug_path, processed)
@@ -167,10 +207,11 @@ def recognize_handwriting(image):
     return " ".join(text.split())
 
 
-
 print("AI Virtual Air Canvas Started!")
 print("B/G/R/Y/W or 1/2/3/4/5: Select colors")
-print("E: Eraser | C: Clear | S: Save | T: Recognize | Q: Quit")
+print("E: Eraser | C: Clear | S: Save")
+print("T: Recognize | Z: Undo | X: Redo | Q: Quit")
+
 
 try:
 
@@ -187,12 +228,19 @@ try:
                 break
 
             frame = cv2.flip(frame, 1)
+
             h, w, _ = frame.shape
 
             if canvas is None:
-                canvas = np.zeros((h, w, 3), dtype=np.uint8)
+                canvas = np.zeros(
+                    (h, w, 3),
+                    dtype=np.uint8
+                )
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
 
             mp_image = mp.Image(
                 image_format=mp.ImageFormat.SRGB,
@@ -204,7 +252,8 @@ try:
             )
 
             result = detector.detect_for_video(
-                mp_image, timestamp
+                mp_image,
+                timestamp
             )
 
             cv2.rectangle(
@@ -305,8 +354,7 @@ try:
 
                 if index_up and middle_up:
 
-                    prev_x, prev_y = None, None
-                    smooth_x, smooth_y = None, None
+                    reset_stroke()
 
                     if 35 <= y <= 100:
 
@@ -321,24 +369,39 @@ try:
                                 break
 
                         if selected is not None:
+
                             select_color(selected)
 
                         elif 535 <= x <= 635:
-                            eraser = True
+
+                            if not eraser:
+                                eraser = True
+                                print("ERASER selected")
 
                         elif 635 < x <= 735:
-                            canvas[:] = 0
-                            print("Canvas cleared")
+
+                            if np.any(canvas):
+                                remember_canvas()
+                                canvas[:] = 0
+                                print("Canvas cleared")
 
                         elif 735 < x <= 835:
+
                             save_canvas(canvas)
 
                 elif index_up and not middle_up:
 
                     if y > 110:
 
+                        if not drawing_active:
+
+                            remember_canvas()
+                            drawing_active = True
+
                         if smooth_x is None:
-                            smooth_x, smooth_y = x, y
+
+                            smooth_x = x
+                            smooth_y = y
 
                         smooth_x = int(
                             smoothing * x +
@@ -352,17 +415,12 @@ try:
 
                         if prev_x is not None and prev_y is not None:
 
-                            draw_color = (
-                                (0, 0, 0)
-                                if eraser
-                                else colors[color_index][1]
-                            )
-
-                            thickness = (
-                                eraser_size
-                                if eraser
-                                else brush_size
-                            )
+                            if eraser:
+                                draw_color = (0, 0, 0)
+                                thickness = eraser_size
+                            else:
+                                draw_color = colors[color_index][1]
+                                thickness = brush_size
 
                             cv2.line(
                                 canvas,
@@ -375,17 +433,12 @@ try:
 
                         else:
 
-                            draw_color = (
-                                (0, 0, 0)
-                                if eraser
-                                else colors[color_index][1]
-                            )
-
-                            thickness = (
-                                eraser_size // 2
-                                if eraser
-                                else brush_size // 2
-                            )
+                            if eraser:
+                                draw_color = (0, 0, 0)
+                                thickness = eraser_size // 2
+                            else:
+                                draw_color = colors[color_index][1]
+                                thickness = brush_size // 2
 
                             cv2.circle(
                                 canvas,
@@ -417,17 +470,22 @@ try:
                                 -1
                             )
 
+                    else:
+
+                        reset_stroke()
+
                 else:
 
-                    prev_x, prev_y = None, None
-                    smooth_x, smooth_y = None, None
+                    reset_stroke()
 
             else:
 
-                prev_x, prev_y = None, None
-                smooth_x, smooth_y = None, None
+                reset_stroke()
 
-            combined = cv2.add(frame, canvas)
+            combined = cv2.add(
+                frame,
+                canvas
+            )
 
             mode = (
                 "ERASER"
@@ -463,7 +521,7 @@ try:
             cv2.putText(
                 combined,
                 "One Finger: Draw | Two Fingers: Select",
-                (15, h - 65),
+                (15, h - 85),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
                 (255, 255, 255),
@@ -473,7 +531,7 @@ try:
             cv2.putText(
                 combined,
                 "B/G/R/Y/W or 1/2/3/4/5: Colors | E: Eraser",
-                (15, h - 40),
+                (15, h - 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
                 (255, 255, 255),
@@ -482,8 +540,18 @@ try:
 
             cv2.putText(
                 combined,
-                "T: Recognize | S: Save | C: Clear | Q: Quit",
-                (15, h - 15),
+                "T: OCR | S: Save | C: Clear | Z: Undo | X: Redo",
+                (15, h - 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255, 255, 255),
+                1
+            )
+
+            cv2.putText(
+                combined,
+                "Q: Quit",
+                (15, h - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
                 (255, 255, 255),
@@ -501,30 +569,83 @@ try:
                 key += 32
 
             if key == ord('b') or key == ord('1'):
+
                 select_color(0)
 
             elif key == ord('g') or key == ord('2'):
+
                 select_color(1)
 
             elif key == ord('r') or key == ord('3'):
+
                 select_color(2)
 
             elif key == ord('y') or key == ord('4'):
+
                 select_color(3)
 
             elif key == ord('w') or key == ord('5'):
+
                 select_color(4)
 
             elif key == ord('e'):
+
                 eraser = True
+                reset_stroke()
                 print("ERASER selected")
 
             elif key == ord('c'):
+
+                if np.any(canvas):
+                    remember_canvas()
+
                 canvas[:] = 0
                 recognized_text = "Canvas cleared"
+
+                reset_stroke()
+
                 print("Canvas cleared")
 
+            elif key == ord('z'):
+
+                if undo_stack:
+
+                    redo_stack.append(canvas.copy())
+
+                    if len(redo_stack) > max_history:
+                        redo_stack.pop(0)
+
+                    canvas = undo_stack.pop()
+
+                    reset_stroke()
+
+                    print("Undo successful")
+
+                else:
+
+                    print("Nothing to undo")
+
+            elif key == ord('x'):
+
+                if redo_stack:
+
+                    undo_stack.append(canvas.copy())
+
+                    if len(undo_stack) > max_history:
+                        undo_stack.pop(0)
+
+                    canvas = redo_stack.pop()
+
+                    reset_stroke()
+
+                    print("Redo successful")
+
+                else:
+
+                    print("Nothing to redo")
+
             elif key == ord('s'):
+
                 save_canvas(canvas)
 
             elif key == ord('t'):
@@ -536,8 +657,11 @@ try:
                     recognized_text = recognize_handwriting(canvas)
 
                     if recognized_text:
+
                         print("Recognized Text:", recognized_text)
+
                     else:
+
                         recognized_text = "No text found"
                         print("No text found. Try writing clearly.")
 
@@ -547,6 +671,7 @@ try:
                     print("OCR Error:", error)
 
             elif key == ord('q') or key == 27:
+
                 print("Closing Air Canvas...")
                 break
 
@@ -554,4 +679,5 @@ finally:
 
     cap.release()
     cv2.destroyAllWindows()
+
     print("Air Canvas closed successfully!")
