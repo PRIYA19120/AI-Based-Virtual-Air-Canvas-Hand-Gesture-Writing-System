@@ -16,11 +16,18 @@ options = HandLandmarkerOptions(
     base_options=BaseOptions(model_asset_path=model_path),
     running_mode=RunningMode.VIDEO,
     num_hands=1,
-    min_hand_detection_confidence=0.6,
-    min_tracking_confidence=0.6
+    min_hand_detection_confidence=0.65,
+    min_tracking_confidence=0.65
 )
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+if not cap.isOpened():
+    print("Camera could not be opened!")
+    exit()
+
 canvas = None
 
 colors = [
@@ -33,209 +40,293 @@ colors = [
 
 color_index = 0
 eraser = False
-prev_x, prev_y = 0, 0
+
+prev_x, prev_y = None, None
+smooth_x, smooth_y = None, None
+
+smoothing = 0.65
 brush_size = 8
 eraser_size = 35
 
 os.makedirs("saved_drawings", exist_ok=True)
 
-with HandLandmarker.create_from_options(options) as detector:
+save_folder = os.path.abspath("saved_drawings")
 
-    start_time = time.monotonic()
+print("Air Canvas Started!")
+print("Press S to save, C to clear, E for eraser, Q to quit.")
 
-    while True:
+try:
+    with HandLandmarker.create_from_options(options) as detector:
 
-        success, frame = cap.read()
+        start_time = time.monotonic()
 
-        if not success:
-            break
+        while True:
 
-        frame = cv2.flip(frame, 1)
-        h, w, _ = frame.shape
+            success, frame = cap.read()
 
-        if canvas is None:
-            canvas = np.zeros((h, w, 3), dtype=np.uint8)
+            if not success:
+                print("Camera frame not received!")
+                break
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.flip(frame, 1)
+            h, w, _ = frame.shape
 
-        mp_image = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=rgb
-        )
+            if canvas is None:
+                canvas = np.zeros((h, w, 3), dtype=np.uint8)
 
-        timestamp = int((time.monotonic() - start_time) * 1000)
-        result = detector.detect_for_video(mp_image, timestamp)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        cv2.rectangle(frame, (0, 0), (w, 110), (35, 35, 35), -1)
+            mp_image = mp.Image(
+                image_format=mp.ImageFormat.SRGB,
+                data=rgb
+            )
 
-        cv2.putText(frame, "AIR CANVAS", (15, 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    (255, 255, 255), 2)
+            timestamp = int((time.monotonic() - start_time) * 1000)
+            result = detector.detect_for_video(mp_image, timestamp)
 
-        for i, (name, color) in enumerate(colors):
-            x1 = 10 + i * 105
-            cv2.rectangle(frame, (x1, 42), (x1 + 95, 85), color, -1)
-            cv2.putText(frame, name, (x1 + 5, 69),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                        (0, 0, 0), 1)
+            cv2.rectangle(frame, (0, 0), (w, 110), (35, 35, 35), -1)
 
-        cv2.putText(frame, "ERASER", (535, 69),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    (255, 255, 255), 2)
+            cv2.putText(
+                frame, "AI VIRTUAL AIR CANVAS",
+                (15, 28), cv2.FONT_HERSHEY_SIMPLEX,
+                0.7, (255, 255, 255), 2
+            )
 
-        cv2.putText(frame, "CLEAR", (640, 69),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    (255, 255, 255), 2)
+            for i, (name, color) in enumerate(colors):
 
-        cv2.putText(frame, "SAVE", (735, 69),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                    (255, 255, 255), 2)
+                x1 = 10 + i * 105
 
-        drawing_color = colors[color_index][1]
+                cv2.rectangle(
+                    frame, (x1, 42), (x1 + 95, 85), color, -1
+                )
 
-        if result.hand_landmarks:
+                cv2.putText(
+                    frame, name, (x1 + 5, 69),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4, (0, 0, 0), 1
+                )
 
-            hand = result.hand_landmarks[0]
+                if color_index == i and not eraser:
+                    cv2.rectangle(
+                        frame, (x1, 42), (x1 + 95, 85),
+                        (255, 255, 255), 2
+                    )
 
-            index_tip = hand[8]
-            index_pip = hand[6]
-            middle_tip = hand[12]
-            middle_pip = hand[10]
+            cv2.putText(
+                frame, "ERASER", (535, 69),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (255, 255, 255), 2
+            )
 
-            x = int(index_tip.x * w)
-            y = int(index_tip.y * h)
+            cv2.putText(
+                frame, "CLEAR", (640, 69),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (255, 255, 255), 2
+            )
 
-            index_up = index_tip.y < index_pip.y
-            middle_up = middle_tip.y < middle_pip.y
+            cv2.putText(
+                frame, "SAVE", (735, 69),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                (255, 255, 255), 2
+            )
 
-            if index_up and middle_up:
+            if result.hand_landmarks:
 
-                prev_x, prev_y = 0, 0
+                hand = result.hand_landmarks[0]
 
-                if 35 <= y <= 100:
+                index_tip = hand[8]
+                index_pip = hand[6]
 
-                    if 10 <= x <= 535:
-                        selected = (x - 10) // 105
+                middle_tip = hand[12]
+                middle_pip = hand[10]
 
-                        if 0 <= selected < len(colors):
-                            color_index = selected
-                            eraser = False
+                x = int(index_tip.x * w)
+                y = int(index_tip.y * h)
 
-                    elif 535 < x <= 635:
-                        eraser = True
+                index_up = index_tip.y < index_pip.y
+                middle_up = middle_tip.y < middle_pip.y
 
-                    elif 635 < x <= 735:
-                        canvas[:] = 0
+                if index_up and middle_up:
 
-                    elif 735 < x <= 835:
-                        filename = f"saved_drawings/drawing_{int(time.time())}.png"
-                        cv2.imwrite(filename, canvas)
-                        print("Drawing saved:", filename)
+                    prev_x, prev_y = None, None
+                    smooth_x, smooth_y = None, None
 
-            elif index_up and not middle_up:
+                    if 35 <= y <= 100:
 
-                if y > 110:
+                        if 10 <= x <= 535:
 
-                    if prev_x != 0 and prev_y != 0:
+                            selected = (x - 10) // 105
 
-                        if eraser:
+                            if 0 <= selected < len(colors):
+                                color_index = selected
+                                eraser = False
+
+                        elif 535 < x <= 635:
+                            eraser = True
+
+                        elif 635 < x <= 735:
+                            canvas[:] = 0
+
+                        elif 735 < x <= 835:
+                            filename = os.path.join(
+                                save_folder,
+                                f"drawing_{int(time.time())}.png"
+                            )
+                            cv2.imwrite(filename, canvas)
+                            print("Drawing saved:", filename)
+
+                elif index_up and not middle_up:
+
+                    if y > 110:
+
+                        if smooth_x is None:
+                            smooth_x, smooth_y = x, y
+
+                        smooth_x = int(
+                            smoothing * x +
+                            (1 - smoothing) * smooth_x
+                        )
+
+                        smooth_y = int(
+                            smoothing * y +
+                            (1 - smoothing) * smooth_y
+                        )
+
+                        if prev_x is not None and prev_y is not None:
+
+                            if eraser:
+                                draw_color = (0, 0, 0)
+                                thickness = eraser_size
+                            else:
+                                draw_color = colors[color_index][1]
+                                thickness = brush_size
+
                             cv2.line(
                                 canvas,
                                 (prev_x, prev_y),
-                                (x, y),
-                                (0, 0, 0),
-                                eraser_size
+                                (smooth_x, smooth_y),
+                                draw_color,
+                                thickness,
+                                cv2.LINE_AA
                             )
 
                         else:
-                            cv2.line(
-                                canvas,
-                                (prev_x, prev_y),
-                                (x, y),
-                                drawing_color,
-                                brush_size
+
+                            if eraser:
+                                cv2.circle(
+                                    canvas,
+                                    (smooth_x, smooth_y),
+                                    eraser_size // 2,
+                                    (0, 0, 0), -1
+                                )
+                            else:
+                                cv2.circle(
+                                    canvas,
+                                    (smooth_x, smooth_y),
+                                    brush_size // 2,
+                                    colors[color_index][1], -1
+                                )
+
+                        prev_x, prev_y = smooth_x, smooth_y
+
+                        if eraser:
+                            cv2.circle(
+                                frame, (smooth_x, smooth_y),
+                                eraser_size, (255, 255, 255), 2
+                            )
+                        else:
+                            cv2.circle(
+                                frame, (smooth_x, smooth_y),
+                                6, colors[color_index][1], -1
                             )
 
-                    prev_x, prev_y = x, y
+                else:
 
-                    if eraser:
-                        cv2.circle(
-                            frame, (x, y), eraser_size,
-                            (255, 255, 255), 2
-                        )
-                    else:
-                        cv2.circle(
-                            frame, (x, y), 8,
-                            drawing_color, -1
-                        )
+                    prev_x, prev_y = None, None
+                    smooth_x, smooth_y = None, None
 
             else:
-                prev_x, prev_y = 0, 0
 
-        else:
-            prev_x, prev_y = 0, 0
+                prev_x, prev_y = None, None
+                smooth_x, smooth_y = None, None
 
-        combined = cv2.add(frame, canvas)
+            combined = cv2.add(frame, canvas)
 
-        mode = "ERASER" if eraser else colors[color_index][0]
+            mode = "ERASER" if eraser else colors[color_index][0]
 
-        cv2.putText(
-            combined,
-            f"MODE: {mode}",
-            (15, 135),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2
-        )
+            cv2.putText(
+                combined, f"MODE: {mode}",
+                (15, 140), cv2.FONT_HERSHEY_SIMPLEX,
+                0.6, (255, 255, 255), 2
+            )
 
-        cv2.putText(
-            combined,
-            "One Finger: Draw | Two Fingers: Select",
-            (15, h - 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 255, 255),
-            1
-        )
+            cv2.putText(
+                combined, "One Finger: Draw | Two Fingers: Select",
+                (15, h - 45), cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, (255, 255, 255), 1
+            )
 
-        cv2.imshow("AI Virtual Air Canvas", combined)
+            cv2.putText(
+                combined, "B: Blue G: Green R: Red Y: Yellow W: White",
+                (15, h - 20), cv2.FONT_HERSHEY_SIMPLEX,
+                0.45, (255, 255, 255), 1
+            )
 
-        key = cv2.waitKey(1) & 0xFF
+            cv2.imshow("AI Virtual Air Canvas", combined)
 
-        if key == ord('b'):
-            color_index = 0
-            eraser = False
+            key = cv2.waitKey(1) & 0xFF
 
-        elif key == ord('g'):
-            color_index = 1
-            eraser = False
+            if key == ord('b'):
+                color_index = 0
+                eraser = False
+                print("BLUE selected")
 
-        elif key == ord('r'):
-            color_index = 2
-            eraser = False
+            elif key == ord('g'):
+                color_index = 1
+                eraser = False
+                print("GREEN selected")
 
-        elif key == ord('y'):
-            color_index = 3
-            eraser = False
+            elif key == ord('r'):
+                color_index = 2
+                eraser = False
+                print("RED selected")
 
-        elif key == ord('w'):
-            color_index = 4
-            eraser = False
+            elif key == ord('y'):
+                color_index = 3
+                eraser = False
+                print("YELLOW selected")
 
-        elif key == ord('e'):
-            eraser = True
+            elif key == ord('w'):
+                color_index = 4
+                eraser = False
+                print("WHITE selected")
 
-        elif key == ord('c'):
-            canvas[:] = 0
+            elif key == ord('e'):
+                eraser = True
+                print("ERASER selected")
 
-        elif key == ord('s'):
-            filename = f"saved_drawings/drawing_{int(time.time())}.png"
-            cv2.imwrite(filename, canvas)
-            print("Drawing saved:", filename)
+            elif key == ord('c'):
+                canvas[:] = 0
+                print("Canvas cleared")
 
-        elif key == ord('q'):
-            break
+            elif key == ord('s') or key == ord('S'):
+                filename = os.path.join(
+                    save_folder,
+                    f"drawing_{int(time.time() * 1000)}.png"
+                )
 
-cap.release()
-cv2.destroyAllWindows()
+                saved = cv2.imwrite(filename, canvas)
+
+                if saved:
+                    print("Drawing saved successfully:", filename)
+                else:
+                    print("Drawing could not be saved!")
+
+            elif key == ord('q') or key == 27:
+                print("Closing Air Canvas...")
+                break
+
+finally:
+    cap.release()
+    cv2.destroyAllWindows()
+    print("Air Canvas Closed!")
