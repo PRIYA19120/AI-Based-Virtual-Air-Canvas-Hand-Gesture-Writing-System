@@ -52,6 +52,8 @@ smooth_x, smooth_y = None, None
 
 smoothing = 0.65
 brush_size = 12
+min_brush_size = 2
+max_brush_size = 40
 eraser_size = 35
 
 os.makedirs("saved_drawings", exist_ok=True)
@@ -62,7 +64,6 @@ recognized_text = "Press T to recognize text"
 undo_stack = []
 redo_stack = []
 max_history = 20
-
 drawing_active = False
 
 
@@ -209,8 +210,9 @@ def recognize_handwriting(image):
 
 print("AI Virtual Air Canvas Started!")
 print("B/G/R/Y/W or 1/2/3/4/5: Select colors")
-print("E: Eraser | C: Clear | S: Save")
-print("T: Recognize | Z: Undo | X: Redo | Q: Quit")
+print("[ or -: Smaller brush | ] or =: Bigger brush")
+print("E: Eraser | C: Clear | S: Save | T: Recognize")
+print("Z: Undo | X: Redo | Q: Quit")
 
 
 try:
@@ -381,8 +383,10 @@ try:
                         elif 635 < x <= 735:
 
                             if np.any(canvas):
+
                                 remember_canvas()
                                 canvas[:] = 0
+
                                 print("Canvas cleared")
 
                         elif 735 < x <= 835:
@@ -416,9 +420,12 @@ try:
                         if prev_x is not None and prev_y is not None:
 
                             if eraser:
+
                                 draw_color = (0, 0, 0)
                                 thickness = eraser_size
+
                             else:
+
                                 draw_color = colors[color_index][1]
                                 thickness = brush_size
 
@@ -434,11 +441,14 @@ try:
                         else:
 
                             if eraser:
+
                                 draw_color = (0, 0, 0)
                                 thickness = eraser_size // 2
+
                             else:
+
                                 draw_color = colors[color_index][1]
-                                thickness = brush_size // 2
+                                thickness = max(1, brush_size // 2)
 
                             cv2.circle(
                                 canvas,
@@ -465,7 +475,7 @@ try:
                             cv2.circle(
                                 frame,
                                 (smooth_x, smooth_y),
-                                6,
+                                max(2, brush_size // 2),
                                 colors[color_index][1],
                                 -1
                             )
@@ -503,6 +513,16 @@ try:
                 2
             )
 
+            cv2.putText(
+                combined,
+                f"BRUSH SIZE: {brush_size}",
+                (15, 205),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 255),
+                2
+            )
+
             display_text = recognized_text[:55]
 
             if len(recognized_text) > 55:
@@ -521,7 +541,7 @@ try:
             cv2.putText(
                 combined,
                 "One Finger: Draw | Two Fingers: Select",
-                (15, h - 85),
+                (15, h - 110),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
                 (255, 255, 255),
@@ -531,6 +551,16 @@ try:
             cv2.putText(
                 combined,
                 "B/G/R/Y/W or 1/2/3/4/5: Colors | E: Eraser",
+                (15, h - 85),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255, 255, 255),
+                1
+            )
+
+            cv2.putText(
+                combined,
+                "[: Smaller Brush | ]: Bigger Brush",
                 (15, h - 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
@@ -588,10 +618,31 @@ try:
 
                 select_color(4)
 
+            elif key in (ord('['), ord('-')):
+
+                brush_size = max(
+                    min_brush_size,
+                    brush_size - 2
+                )
+
+                reset_stroke()
+                print("Brush size:", brush_size)
+
+            elif key in (ord(']'), ord('='), ord('+')):
+
+                brush_size = min(
+                    max_brush_size,
+                    brush_size + 2
+                )
+
+                reset_stroke()
+                print("Brush size:", brush_size)
+
             elif key == ord('e'):
 
                 eraser = True
                 reset_stroke()
+
                 print("ERASER selected")
 
             elif key == ord('c'):
