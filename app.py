@@ -1,4 +1,3 @@
-
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -56,6 +55,17 @@ min_brush_size = 2
 max_brush_size = 40
 eraser_size = 35
 
+backgrounds = [
+    ("WHITE", (255, 255, 255)),
+    ("BLACK", (0, 0, 0)),
+    ("LIGHT BLUE", (173, 216, 230)),
+    ("LIGHT GREEN", (144, 238, 144)),
+    ("CREAM", (240, 248, 255)),
+    ("PINK", (203, 192, 255))
+]
+
+background_index = 0
+
 os.makedirs("saved_drawings", exist_ok=True)
 save_folder = os.path.abspath("saved_drawings")
 
@@ -104,17 +114,42 @@ def select_color(index):
         print(colors[index][0], "selected")
 
 
+def select_background(index):
+
+    global background_index
+
+    background_index = index
+
+    print(
+        "Background selected:",
+        backgrounds[index][0]
+    )
+
+
 def save_canvas(image):
+
+    bg_color = backgrounds[background_index][1]
+
+    background = np.full(
+        image.shape,
+        bg_color,
+        dtype=np.uint8
+    )
+
+    mask = np.any(image != 0, axis=2)
+
+    background[mask] = image[mask]
 
     filename = os.path.join(
         save_folder,
         f"drawing_{int(time.time() * 1000)}.png"
     )
 
-    saved = cv2.imwrite(filename, image)
+    saved = cv2.imwrite(filename, background)
 
     if saved:
         print("Drawing saved successfully:", filename)
+        print("Background:", backgrounds[background_index][0])
     else:
         print("Drawing could not be saved!")
 
@@ -209,8 +244,14 @@ def recognize_handwriting(image):
 
 
 print("AI Virtual Air Canvas Started!")
-print("B/G/R/Y/W or 1/2/3/4/5: Select colors")
-print("[ or -: Smaller brush | ] or =: Bigger brush")
+print("B/G/R/Y/W or 1/2/3/4/5: Select Drawing Colors")
+print("6: White Background")
+print("7: Black Background")
+print("8: Light Blue Background")
+print("9: Light Green Background")
+print("0: Cream Background")
+print("P: Pink Background")
+print("[ or -: Smaller Brush | ] or =: Bigger Brush")
 print("E: Eraser | C: Clear | S: Save | T: Recognize")
 print("Z: Undo | X: Redo | Q: Quit")
 
@@ -505,20 +546,20 @@ try:
 
             cv2.putText(
                 combined,
-                f"MODE: {mode}",
-                (15, 140),
+                f"SAVE BACKGROUND: {backgrounds[background_index][0]}",
+                (15, 115),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
+                0.5,
+                (0, 255, 255),
                 2
             )
 
             cv2.putText(
                 combined,
-                f"BRUSH SIZE: {brush_size}",
-                (15, 205),
+                f"MODE: {mode}",
+                (15, 140),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
+                0.6,
                 (255, 255, 255),
                 2
             )
@@ -540,8 +581,18 @@ try:
 
             cv2.putText(
                 combined,
+                f"BRUSH SIZE: {brush_size}",
+                (15, 205),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 255),
+                2
+            )
+
+            cv2.putText(
+                combined,
                 "One Finger: Draw | Two Fingers: Select",
-                (15, h - 110),
+                (15, h - 135),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
                 (255, 255, 255),
@@ -551,10 +602,20 @@ try:
             cv2.putText(
                 combined,
                 "B/G/R/Y/W or 1/2/3/4/5: Colors | E: Eraser",
-                (15, h - 85),
+                (15, h - 110),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.4,
                 (255, 255, 255),
+                1
+            )
+
+            cv2.putText(
+                combined,
+                "6-0: Background Colors | P: Pink",
+                (15, h - 85),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (0, 255, 255),
                 1
             )
 
@@ -617,6 +678,30 @@ try:
             elif key == ord('w') or key == ord('5'):
 
                 select_color(4)
+
+            elif key == ord('6'):
+
+                select_background(0)
+
+            elif key == ord('7'):
+
+                select_background(1)
+
+            elif key == ord('8'):
+
+                select_background(2)
+
+            elif key == ord('9'):
+
+                select_background(3)
+
+            elif key == ord('0'):
+
+                select_background(4)
+
+            elif key == ord('p'):
+
+                select_background(5)
 
             elif key in (ord('['), ord('-')):
 
