@@ -5,12 +5,15 @@ import numpy as np
 import time
 import os
 import pytesseract
+import subprocess
+import sys
 
 pytesseract.pytesseract.tesseract_cmd = (
     r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 )
 
-model_path = "hand_landmarker.task"
+project_folder = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(project_folder, "hand_landmarker.task")
 
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
@@ -66,7 +69,7 @@ min_brush_size = 2
 max_brush_size = 40
 eraser_size = 35
 
-save_folder = os.path.abspath("saved_drawings")
+save_folder = os.path.join(project_folder, "saved_drawings")
 os.makedirs(save_folder, exist_ok=True)
 
 last_saved_path = None
@@ -175,6 +178,33 @@ def export_jpg(image):
         print("JPG exported:", filename)
     else:
         status_message = "JPG export failed"
+
+
+def open_gallery():
+    global status_message
+
+    gallery_path = os.path.join(
+        project_folder,
+        "gallery.py"
+    )
+
+    if not os.path.isfile(gallery_path):
+        status_message = "gallery.py not found"
+        print(status_message)
+        return
+
+    try:
+        subprocess.Popen(
+            [sys.executable, gallery_path],
+            cwd=project_folder
+        )
+
+        status_message = "Gallery opened"
+        print(status_message)
+
+    except Exception as error:
+        status_message = "Could not open gallery"
+        print("Gallery error:", error)
 
 
 def prepare_ocr_image(image, is_canvas=False):
@@ -428,25 +458,20 @@ def draw_toolbar(frame):
         ("UNDO", (180, 140, 80)),
         ("REDO", (180, 140, 80)),
         ("OCR", (100, 200, 200)),
-        ("SAVED OCR", (100, 200, 200))
+        ("SAVED OCR", (100, 200, 200)),
+        ("GALLERY", (180, 100, 220))
     ]
 
-    tool_positions = {}
-
     for i, (label, color) in enumerate(tools):
-        x1 = 475 + i * 98
+        x1 = 475 + i * 88
 
         draw_button(
             frame,
             x1, 38,
-            x1 + 88, 75,
+            x1 + 80, 75,
             label,
             color,
             eraser if label == "ERASER" else False
-        )
-
-        tool_positions[label] = (
-            x1, 38, x1 + 88, 75
         )
 
     cv2.putText(
@@ -501,8 +526,6 @@ def draw_toolbar(frame):
         1
     )
 
-    return tool_positions
-
 
 def mouse_callback(event, x, y, flags, param):
     global eraser, brush_size
@@ -525,18 +548,19 @@ def mouse_callback(event, x, y, flags, param):
 
         tool_positions = [
             ("ERASER", 475),
-            ("CLEAR", 573),
-            ("SAVE", 671),
-            ("JPG", 769),
-            ("UNDO", 867),
-            ("REDO", 965),
-            ("OCR", 1063),
-            ("SAVED OCR", 1161)
+            ("CLEAR", 563),
+            ("SAVE", 651),
+            ("JPG", 739),
+            ("UNDO", 827),
+            ("REDO", 915),
+            ("OCR", 1003),
+            ("SAVED OCR", 1091),
+            ("GALLERY", 1179)
         ]
 
         for label, x1 in tool_positions:
 
-            if x1 <= x <= x1 + 88:
+            if x1 <= x <= x1 + 80:
 
                 if label == "ERASER":
                     eraser = True
@@ -589,6 +613,9 @@ def mouse_callback(event, x, y, flags, param):
                         status_message = "Saved OCR error"
                         print(error)
 
+                elif label == "GALLERY":
+                    open_gallery()
+
                 return
 
     if 88 <= y <= 121:
@@ -636,6 +663,7 @@ print("--------------------------------")
 
 try:
     cv2.namedWindow("AI Virtual Air Canvas")
+
     cv2.setMouseCallback(
         "AI Virtual Air Canvas",
         mouse_callback
@@ -699,7 +727,6 @@ try:
                 middle_up = middle_tip.y < middle_pip.y
 
                 if index_up and middle_up:
-
                     reset_stroke()
 
                 elif index_up and not middle_up:
