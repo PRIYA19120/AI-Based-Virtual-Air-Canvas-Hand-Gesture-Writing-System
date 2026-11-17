@@ -64,10 +64,14 @@ prev_x, prev_y = None, None
 smooth_x, smooth_y = None, None
 
 smoothing = 0.65
+
 brush_size = 12
 min_brush_size = 2
 max_brush_size = 40
+
 eraser_size = 35
+min_eraser_size = 5
+max_eraser_size = 100
 
 save_folder = os.path.join(project_folder, "saved_drawings")
 os.makedirs(save_folder, exist_ok=True)
@@ -506,10 +510,20 @@ def draw_toolbar(frame):
         "BRUSH +", (160, 160, 160)
     )
 
+    draw_button(
+        frame, 960, 88, 1040, 121,
+        "ERASER -", (160, 160, 160)
+    )
+
+    draw_button(
+        frame, 1047, 88, 1127, 121,
+        "ERASER +", (160, 160, 160)
+    )
+
     cv2.putText(
         frame,
-        f"SIZE: {brush_size}",
-        (970, 110),
+        f"B:{brush_size} E:{eraser_size}",
+        (1135, 110),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.48,
         (255, 255, 255),
@@ -528,7 +542,7 @@ def draw_toolbar(frame):
 
 
 def mouse_callback(event, x, y, flags, param):
-    global eraser, brush_size
+    global eraser, brush_size, eraser_size
     global recognized_text, status_message
 
     if event != cv2.EVENT_LBUTTONDOWN:
@@ -643,6 +657,22 @@ def mouse_callback(event, x, y, flags, param):
             status_message = f"Brush size: {brush_size}"
             reset_stroke()
 
+        elif 960 <= x <= 1040:
+            eraser_size = max(
+                min_eraser_size,
+                eraser_size - 5
+            )
+            status_message = f"Eraser size: {eraser_size}"
+            reset_stroke()
+
+        elif 1047 <= x <= 1127:
+            eraser_size = min(
+                max_eraser_size,
+                eraser_size + 5
+            )
+            status_message = f"Eraser size: {eraser_size}"
+            reset_stroke()
+
 
 print("AI VIRTUAL AIR CANVAS STARTED")
 print("--------------------------------")
@@ -653,6 +683,8 @@ print("6-0: Backgrounds | P: Pink")
 print("E: Eraser | C: Clear")
 print("[ / -: Smaller Brush")
 print("] / =: Bigger Brush")
+print(", : Decrease Eraser Size")
+print(". : Increase Eraser Size")
 print("S: Save PNG | J: Export JPG")
 print("T: Current Canvas OCR")
 print("O: Saved PNG OCR")
@@ -899,6 +931,22 @@ try:
                     max_brush_size,
                     brush_size + 2
                 )
+                reset_stroke()
+
+            elif key == ord(','):
+                eraser_size = max(
+                    min_eraser_size,
+                    eraser_size - 5
+                )
+                status_message = f"Eraser size: {eraser_size}"
+                reset_stroke()
+
+            elif key == ord('.'):
+                eraser_size = min(
+                    max_eraser_size,
+                    eraser_size + 5
+                )
+                status_message = f"Eraser size: {eraser_size}"
                 reset_stroke()
 
             elif key == ord('e'):
