@@ -1,4 +1,3 @@
-
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -7,13 +6,16 @@ import os
 import pytesseract
 import subprocess
 import sys
+import math
 
-pytesseract.pytesseract.tesseract_cmd = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 project_folder = os.path.dirname(os.path.abspath(__file__))
 model_path = os.path.join(project_folder, "hand_landmarker.task")
+
+if not os.path.isfile(model_path):
+    print("hand_landmarker.task file project folder mein nahi mili!")
+    raise SystemExit
 
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
@@ -37,6 +39,7 @@ if not cap.isOpened():
     raise SystemExit
 
 canvas = None
+stroke_layer = None
 
 colors = [
     ("BLUE", (255, 0, 0)),
@@ -48,6 +51,7 @@ colors = [
 
 color_index = 0
 eraser = False
+shape_recognition = True
 
 backgrounds = [
     ("WHITE", (255, 255, 255)),
@@ -59,10 +63,8 @@ backgrounds = [
 ]
 
 background_index = 0
-
 prev_x, prev_y = None, None
 smooth_x, smooth_y = None, None
-
 smoothing = 0.65
 
 brush_size = 12
@@ -83,22 +85,16 @@ status_message = "Welcome to Air Canvas"
 undo_stack = []
 redo_stack = []
 max_history = 20
-drawing_active = False
 
+drawing_active = False
+stroke_points = []
 toolbar_height = 155
 
 
-def reset_stroke():
-    global drawing_active
-    global prev_x, prev_y
-    global smooth_x, smooth_y
-
-    drawing_active = False
-    prev_x, prev_y = None, None
-    smooth_x, smooth_y = None, None
-
-
 def remember_canvas():
+    if canvas is None:
+        return
+
     undo_stack.append(canvas.copy())
 
     if len(undo_stack) > max_history:
@@ -107,12 +103,191 @@ def remember_canvas():
     redo_stack.clear()
 
 
+def distance(p1, p2):
+    return math.hypot(
+        p2[0] - p1[0],
+        p2[1] - p1[1]
+    )
+
+
+def recognize_shape(points):
+    if len(points) < 8:
+        return None
+
+    pts = np.array(
+        points,
+        dtype=np.int32
+    ).reshape((-1, 1, 2))
+
+    x, y, w, h = cv2.boundingRect(pts)
+
+    if w < 25 or h < 25:
+        return None
+
+    perimeter = cv2.arcLength(pts, False)
+
+    if perimeter < 45:
+        return None
+
+    start_end_distance = distance(
+        points[0],
+        points[-1]
+    )
+
+    path_length = sum(
+        distance(points[i - 1], points[i])
+        for i in range(1, len(points))
+    )
+
+    if path_length > 0:
+        straightness = start_end_distance / path_length
+
+        if straightness > 0.93 and start_end_distance > 45:
+            return "LINE", (points[0], points[-1])
+
+    closed_pts = pts.copy()
+
+    if distance(points[0], points[-1]) > 12:
+        closed_pts = np.concatenate(
+            (
+                closed_pts,
+                np.array(points[0], dtype=np.int32).reshape(1, 1, 2)
+            ),
+            axis=0
+        )
+
+    closed_perimeter = cv2.arcLength(closed_pts, True)
+    area = cv2.contourArea(closed_pts)
+
+    if closed_perimeter <= 0 or area < 500:
+        return None
+
+    circularity = (
+        4 * math.pi * area
+    ) / (closed_perimeter * closed_perimeter)
+
+    aspect_ratio = w / float(h)
+
+    if circularity > 0.78 and 0.72 <= aspect_ratio <= 1.38:
+        center = (
+            x + w // 2,
+            y + h // 2
+        )
+
+        radius = max(1, int((w + h) / 4))
+
+        return "CIRCLE", (center, radius)
+
+    approx = cv2.approxPolyDP(
+        closed_pts,
+        0.035 * closed_perimeter,
+        True
+    )
+
+    vertices = len(approx)
+
+    if vertices == 3 and cv2.isContourConvex(approx):
+        return "TRIANGLE", approx.reshape(-1, 2)
+
+    if vertices == 4 and cv2.isContourConvex(approx):
+        return "RECTANGLE", cv2.boundingRect(approx)
+
+    return None
+
+
+def finish_stroke():
+    global drawing_active
+    global stroke_layer, stroke_points
+    global status_message
+
+    if not drawing_active:
+        return
+
+    if eraser:
+        pass
+
+    elif shape_recognition and len(stroke_points) >= 8:
+        detected = recognize_shape(stroke_points)
+
+        if detected:
+            shape_name, data = detected
+
+            draw_color = colors[color_index][1]
+            thickness = max(2, brush_size)
+
+            if shape_name == "LINE":
+                cv2.line(
+                    canvas,
+                    data[0],
+                    data[1],
+                    draw_color,
+                    thickness,
+                    cv2.LINE_AA
+                )
+
+            elif shape_name == "CIRCLE":
+                cv2.circle(
+                    canvas,
+                    data[0],
+                    data[1],
+                    draw_color,
+                    thickness,
+                    cv2.LINE_AA
+                )
+
+            elif shape_name == "TRIANGLE":
+                cv2.polylines(
+                    canvas,
+                    [data.astype(np.int32)],
+                    True,
+                    draw_color,
+                    thickness,
+                    cv2.LINE_AA
+                )
+
+            elif shape_name == "RECTANGLE":
+                x, y, w, h = data
+
+                cv2.rectangle(
+                    canvas,
+                    (x, y),
+                    (x + w, y + h),
+                    draw_color,
+                    thickness,
+                    cv2.LINE_AA
+                )
+
+            status_message = shape_name.title() + " recognized"
+
+        else:
+            cv2.add(canvas, stroke_layer, dst=canvas)
+
+    else:
+        cv2.add(canvas, stroke_layer, dst=canvas)
+
+    stroke_layer[:] = 0
+    stroke_points = []
+    drawing_active = False
+
+
+def reset_stroke(finalize=True):
+    global prev_x, prev_y
+    global smooth_x, smooth_y
+
+    if finalize:
+        finish_stroke()
+
+    prev_x, prev_y = None, None
+    smooth_x, smooth_y = None, None
+
+
 def select_color(index):
     global color_index, eraser, status_message
 
+    reset_stroke()
+
     color_index = index
     eraser = False
-    reset_stroke()
 
     status_message = colors[index][0] + " selected"
     print(status_message)
@@ -122,8 +297,8 @@ def select_background(index):
     global background_index, status_message
 
     background_index = index
-    status_message = backgrounds[index][0] + " background selected"
 
+    status_message = backgrounds[index][0] + " background selected"
     print(status_message)
 
 
@@ -180,6 +355,7 @@ def export_jpg(image):
     ):
         status_message = "JPG exported successfully"
         print("JPG exported:", filename)
+
     else:
         status_message = "JPG export failed"
 
@@ -224,6 +400,7 @@ def prepare_ocr_image(image, is_canvas=False):
             255,
             cv2.THRESH_BINARY
         )
+
     else:
         _, binary = cv2.threshold(
             gray,
@@ -317,6 +494,7 @@ def recognize_latest_saved_drawing():
 
     if last_saved_path and os.path.isfile(last_saved_path):
         image_path = last_saved_path
+
     else:
         files = [
             os.path.join(save_folder, name)
@@ -349,11 +527,13 @@ def recognize_latest_saved_drawing():
 def undo_canvas():
     global canvas, status_message
 
+    reset_stroke()
+
     if undo_stack:
         redo_stack.append(canvas.copy())
         canvas = undo_stack.pop()
-        reset_stroke()
         status_message = "Undo successful"
+
     else:
         status_message = "Nothing to undo"
 
@@ -361,11 +541,13 @@ def undo_canvas():
 def redo_canvas():
     global canvas, status_message
 
+    reset_stroke()
+
     if redo_stack:
         undo_stack.append(canvas.copy())
         canvas = redo_stack.pop()
-        reset_stroke()
         status_message = "Redo successful"
+
     else:
         status_message = "Nothing to redo"
 
@@ -373,12 +555,14 @@ def redo_canvas():
 def clear_canvas():
     global canvas, recognized_text, status_message
 
+    reset_stroke()
+
     if np.any(canvas):
         remember_canvas()
 
     canvas[:] = 0
+
     recognized_text = "Canvas cleared"
-    reset_stroke()
     status_message = "Canvas cleared"
 
 
@@ -405,20 +589,22 @@ def draw_button(frame, x1, y1, x2, y2, label, color, selected=False):
     text_size = cv2.getTextSize(
         label,
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.42,
+        0.38,
         1
     )[0]
 
     text_x = x1 + (x2 - x1 - text_size[0]) // 2
     text_y = y1 + (y2 - y1 + text_size[1]) // 2
 
+    text_color = (0, 0, 0) if color != (0, 0, 0) else (255, 255, 255)
+
     cv2.putText(
         frame,
         label,
         (text_x, text_y),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.42,
-        (0, 0, 0) if color != (0, 0, 0) else (255, 255, 255),
+        0.38,
+        text_color,
         1
     )
 
@@ -463,19 +649,22 @@ def draw_toolbar(frame):
         ("REDO", (180, 140, 80)),
         ("OCR", (100, 200, 200)),
         ("SAVED OCR", (100, 200, 200)),
-        ("GALLERY", (180, 100, 220))
+        ("GALLERY", (180, 100, 220)),
+        ("SHAPE ON" if shape_recognition else "SHAPE OFF", (100, 180, 180))
     ]
 
     for i, (label, color) in enumerate(tools):
-        x1 = 475 + i * 88
+        x1 = 475 + i * 78
+
+        selected = label.startswith("SHAPE") and shape_recognition
 
         draw_button(
             frame,
             x1, 38,
-            x1 + 80, 75,
+            x1 + 74, 75,
             label,
             color,
-            eraser if label == "ERASER" else False
+            selected
         )
 
     cv2.putText(
@@ -500,25 +689,10 @@ def draw_toolbar(frame):
             background_index == i
         )
 
-    draw_button(
-        frame, 805, 88, 875, 121,
-        "BRUSH -", (160, 160, 160)
-    )
-
-    draw_button(
-        frame, 882, 88, 952, 121,
-        "BRUSH +", (160, 160, 160)
-    )
-
-    draw_button(
-        frame, 960, 88, 1040, 121,
-        "ERASER -", (160, 160, 160)
-    )
-
-    draw_button(
-        frame, 1047, 88, 1127, 121,
-        "ERASER +", (160, 160, 160)
-    )
+    draw_button(frame, 805, 88, 875, 121, "BRUSH -", (160, 160, 160))
+    draw_button(frame, 882, 88, 952, 121, "BRUSH +", (160, 160, 160))
+    draw_button(frame, 960, 88, 1040, 121, "ERASER -", (160, 160, 160))
+    draw_button(frame, 1047, 88, 1127, 121, "ERASER +", (160, 160, 160))
 
     cv2.putText(
         frame,
@@ -543,7 +717,7 @@ def draw_toolbar(frame):
 
 def mouse_callback(event, x, y, flags, param):
     global eraser, brush_size, eraser_size
-    global recognized_text, status_message
+    global recognized_text, status_message, shape_recognition
 
     if event != cv2.EVENT_LBUTTONDOWN:
         return
@@ -562,32 +736,35 @@ def mouse_callback(event, x, y, flags, param):
 
         tool_positions = [
             ("ERASER", 475),
-            ("CLEAR", 563),
-            ("SAVE", 651),
-            ("JPG", 739),
-            ("UNDO", 827),
-            ("REDO", 915),
-            ("OCR", 1003),
-            ("SAVED OCR", 1091),
-            ("GALLERY", 1179)
+            ("CLEAR", 553),
+            ("SAVE", 631),
+            ("JPG", 709),
+            ("UNDO", 787),
+            ("REDO", 865),
+            ("OCR", 943),
+            ("SAVED OCR", 1021),
+            ("GALLERY", 1099),
+            ("SHAPE", 1177)
         ]
 
         for label, x1 in tool_positions:
 
-            if x1 <= x <= x1 + 80:
+            if x1 <= x <= x1 + 74:
 
                 if label == "ERASER":
-                    eraser = True
                     reset_stroke()
+                    eraser = True
                     status_message = "Eraser selected"
 
                 elif label == "CLEAR":
                     clear_canvas()
 
                 elif label == "SAVE":
+                    reset_stroke()
                     save_canvas(canvas)
 
                 elif label == "JPG":
+                    reset_stroke()
                     export_jpg(canvas)
 
                 elif label == "UNDO":
@@ -597,6 +774,8 @@ def mouse_callback(event, x, y, flags, param):
                     redo_canvas()
 
                 elif label == "OCR":
+                    reset_stroke()
+
                     try:
                         recognized_text = recognize_handwriting(
                             canvas,
@@ -614,6 +793,7 @@ def mouse_callback(event, x, y, flags, param):
                         print(error)
 
                 elif label == "SAVED OCR":
+
                     try:
                         recognized_text = recognize_latest_saved_drawing()
 
@@ -630,6 +810,16 @@ def mouse_callback(event, x, y, flags, param):
                 elif label == "GALLERY":
                     open_gallery()
 
+                elif label == "SHAPE":
+                    reset_stroke()
+                    shape_recognition = not shape_recognition
+
+                    status_message = (
+                        "Shape recognition ON"
+                        if shape_recognition
+                        else "Shape recognition OFF"
+                    )
+
                 return
 
     if 88 <= y <= 121:
@@ -642,39 +832,25 @@ def mouse_callback(event, x, y, flags, param):
                 return
 
         if 805 <= x <= 875:
-            brush_size = max(
-                min_brush_size,
-                brush_size - 2
-            )
+            brush_size = max(min_brush_size, brush_size - 2)
             status_message = f"Brush size: {brush_size}"
             reset_stroke()
 
         elif 882 <= x <= 952:
-            brush_size = min(
-                max_brush_size,
-                brush_size + 2
-            )
+            brush_size = min(max_brush_size, brush_size + 2)
             status_message = f"Brush size: {brush_size}"
             reset_stroke()
 
         elif 960 <= x <= 1040:
-            eraser_size = max(
-                min_eraser_size,
-                eraser_size - 5
-            )
+            eraser_size = max(min_eraser_size, eraser_size - 5)
             status_message = f"Eraser size: {eraser_size}"
             reset_stroke()
 
         elif 1047 <= x <= 1127:
-            eraser_size = min(
-                max_eraser_size,
-                eraser_size + 5
-            )
+            eraser_size = min(max_eraser_size, eraser_size + 5)
             status_message = f"Eraser size: {eraser_size}"
             reset_stroke()
-
-
-print("AI VIRTUAL AIR CANVAS STARTED")
+        print("AI VIRTUAL AIR CANVAS STARTED")
 print("--------------------------------")
 print("Mouse toolbar: Click buttons on screen")
 print("B/G/R/Y/W: Colors")
@@ -689,6 +865,7 @@ print("S: Save PNG | J: Export JPG")
 print("T: Current Canvas OCR")
 print("O: Saved PNG OCR")
 print("Z: Undo | X: Redo")
+print("A: Shape Recognition ON/OFF")
 print("Q: Quit")
 print("--------------------------------")
 
@@ -719,6 +896,11 @@ try:
 
             if canvas is None:
                 canvas = np.zeros(
+                    (h, w, 3),
+                    dtype=np.uint8
+                )
+
+                stroke_layer = np.zeros(
                     (h, w, 3),
                     dtype=np.uint8
                 )
@@ -766,8 +948,13 @@ try:
                     if y > toolbar_height:
 
                         if not drawing_active:
+
                             remember_canvas()
+
                             drawing_active = True
+                            stroke_points = []
+
+                            stroke_layer[:] = 0
 
                         if smooth_x is None:
                             smooth_x = x
@@ -783,40 +970,65 @@ try:
                             (1 - smoothing) * smooth_y
                         )
 
-                        if prev_x is not None and prev_y is not None:
+                        current_point = (
+                            smooth_x,
+                            smooth_y
+                        )
 
-                            if eraser:
-                                draw_color = (0, 0, 0)
-                                thickness = eraser_size
+                        if not stroke_points or distance(
+                            stroke_points[-1],
+                            current_point
+                        ) >= 3:
+
+                            stroke_points.append(current_point)
+
+                        if eraser:
+
+                            if prev_x is not None and prev_y is not None:
+
+                                cv2.line(
+                                    canvas,
+                                    (prev_x, prev_y),
+                                    (smooth_x, smooth_y),
+                                    (0, 0, 0),
+                                    eraser_size,
+                                    cv2.LINE_AA
+                                )
+
                             else:
-                                draw_color = colors[color_index][1]
-                                thickness = brush_size
 
-                            cv2.line(
-                                canvas,
-                                (prev_x, prev_y),
-                                (smooth_x, smooth_y),
-                                draw_color,
-                                thickness,
-                                cv2.LINE_AA
-                            )
+                                cv2.circle(
+                                    canvas,
+                                    (smooth_x, smooth_y),
+                                    eraser_size // 2,
+                                    (0, 0, 0),
+                                    -1
+                                )
 
                         else:
 
-                            if eraser:
-                                thickness = eraser_size // 2
-                                draw_color = (0, 0, 0)
-                            else:
-                                thickness = max(1, brush_size // 2)
-                                draw_color = colors[color_index][1]
+                            draw_color = colors[color_index][1]
 
-                            cv2.circle(
-                                canvas,
-                                (smooth_x, smooth_y),
-                                thickness,
-                                draw_color,
-                                -1
-                            )
+                            if prev_x is not None and prev_y is not None:
+
+                                cv2.line(
+                                    stroke_layer,
+                                    (prev_x, prev_y),
+                                    (smooth_x, smooth_y),
+                                    draw_color,
+                                    brush_size,
+                                    cv2.LINE_AA
+                                )
+
+                            else:
+
+                                cv2.circle(
+                                    stroke_layer,
+                                    (smooth_x, smooth_y),
+                                    max(1, brush_size // 2),
+                                    draw_color,
+                                    -1
+                                )
 
                         prev_x, prev_y = smooth_x, smooth_y
 
@@ -834,6 +1046,12 @@ try:
                 canvas
             )
 
+            if stroke_layer is not None:
+                combined = cv2.add(
+                    combined,
+                    stroke_layer
+                )
+
             draw_toolbar(combined)
 
             cv2.putText(
@@ -844,6 +1062,16 @@ try:
                 0.55,
                 (0, 255, 255),
                 2
+            )
+
+            cv2.putText(
+                combined,
+                f"SHAPE RECOGNITION: {'ON' if shape_recognition else 'OFF'}",
+                (15, 245),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                (0, 255, 255),
+                1
             )
 
             cv2.putText(
@@ -868,7 +1096,7 @@ try:
 
             cv2.putText(
                 combined,
-                "Mouse: Toolbar | Keyboard: Shortcuts | Q: Quit",
+                "A: Shape Recognition | Mouse: Toolbar | Q: Quit",
                 (15, h - 35),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
@@ -924,6 +1152,8 @@ try:
                     min_brush_size,
                     brush_size - 2
                 )
+
+                status_message = f"Brush size: {brush_size}"
                 reset_stroke()
 
             elif key in (ord(']'), ord('='), ord('+')):
@@ -931,6 +1161,8 @@ try:
                     max_brush_size,
                     brush_size + 2
                 )
+
+                status_message = f"Brush size: {brush_size}"
                 reset_stroke()
 
             elif key == ord(','):
@@ -938,6 +1170,7 @@ try:
                     min_eraser_size,
                     eraser_size - 5
                 )
+
                 status_message = f"Eraser size: {eraser_size}"
                 reset_stroke()
 
@@ -946,13 +1179,25 @@ try:
                     max_eraser_size,
                     eraser_size + 5
                 )
+
                 status_message = f"Eraser size: {eraser_size}"
                 reset_stroke()
 
             elif key == ord('e'):
-                eraser = True
                 reset_stroke()
+                eraser = True
                 status_message = "Eraser selected"
+
+            elif key == ord('a'):
+                reset_stroke()
+
+                shape_recognition = not shape_recognition
+
+                status_message = (
+                    "Shape recognition ON"
+                    if shape_recognition
+                    else "Shape recognition OFF"
+                )
 
             elif key == ord('c'):
                 clear_canvas()
@@ -964,12 +1209,16 @@ try:
                 redo_canvas()
 
             elif key == ord('s'):
+                reset_stroke()
                 save_canvas(canvas)
 
             elif key == ord('j'):
+                reset_stroke()
                 export_jpg(canvas)
 
             elif key == ord('t'):
+                reset_stroke()
+
                 try:
                     recognized_text = recognize_handwriting(
                         canvas,
@@ -989,6 +1238,8 @@ try:
                     print("OCR Error:", error)
 
             elif key == ord('o'):
+                reset_stroke()
+
                 try:
                     recognized_text = recognize_latest_saved_drawing()
 
@@ -1005,10 +1256,11 @@ try:
                     print("Saved OCR Error:", error)
 
             elif key == ord('q') or key == 27:
+                reset_stroke()
                 print("Closing Air Canvas...")
                 break
 
 finally:
     cap.release()
     cv2.destroyAllWindows()
-    print("Air Canvas closed successfully!")
+    print("Air Canvas closed successfully!")    
