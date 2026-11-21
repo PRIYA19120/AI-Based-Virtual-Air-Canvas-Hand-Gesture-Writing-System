@@ -1,4 +1,3 @@
-
 # 🎨 AI Virtual Air Canvas
 
 An AI-powered virtual drawing application that allows users to create digital drawings in the air using hand gestures. The system uses a webcam to track hand movements and converts them into real-time drawings on a virtual canvas.
@@ -117,6 +116,3 @@ BCA – Artificial Intelligence and Data Science
 
 Graphic Era University, Dehradun
 
----
-
-⭐ If you find this project interesting, feel free to explore the repository!
